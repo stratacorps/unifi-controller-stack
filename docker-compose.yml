@@ -1,0 +1,41 @@
+services:
+  unifi-db:
+    image: docker.io/mongo:8
+    container_name: unifi-db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=CHANGE_ME
+      - MONGO_USER=unifi
+      - MONGO_PASS=CHANGE_ME
+      - MONGO_DBNAME=unifi
+      - MONGO_AUTHSOURCE=admin
+    volumes:
+      - ./mongo-data:/data/db
+      - ./scripts/first-run-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
+    restart: unless-stopped
+
+  unifi-network:
+    image: lscr.io/linuxserver/unifi-network-application:10.0.162-ls113
+    container_name: unifi-network
+    depends_on:
+      - unifi-db
+    environment:
+      - PUID=__PUID__
+      - PGID=__PGID__
+      - TZ=America/Chicago
+      - MONGO_HOST=unifi-db
+      - MONGO_PORT=27017
+      - MONGO_DBNAME=unifi
+      - MONGO_USER=unifi
+      - MONGO_PASS=CHANGE_ME
+      - MONGO_AUTHSOURCE=admin
+    volumes:
+      - ./unifi-data:/config
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+      - "3478:3478/udp"
+      - "10001:10001/udp"
+      - "8843:8843"
+      - "8880:8880"
+    restart: unless-stopped
