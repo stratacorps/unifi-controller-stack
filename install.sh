@@ -21,7 +21,7 @@ need_root() {
 prompt() {
   local var="$1" default="$2" msg="$3"
   local val
-  read -r -p "${msg} [${default}]: " val || true
+  read -r -p "${msg} [${default}]: " val </dev/tty || true
   val="${val:-$default}"
   printf -v "$var" '%s' "$val"
 }
@@ -29,7 +29,7 @@ prompt() {
 confirm() {
   local msg="$1" default="${2:-N}"
   local yn
-  read -r -p "${msg} (y/n) [${default}]: " yn || true
+  read -r -p "${msg} (y/n) [${default}]: " yn </dev/tty || true
   yn="${yn:-$default}"
   [[ "$yn" =~ ^[Yy]$ ]]
 }
