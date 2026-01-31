@@ -18,7 +18,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}"
-REPO_RAW_BASE_DEFAULT="https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main"
+REPO_RAW_BASE="https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main"
+TEMPLATE_MANIFEST="TEMPLATE.manifest"
 STACK_USER=""
 STACK_UID=""
 STACK_GID=""
@@ -223,37 +224,49 @@ EOF
 
 fetch_if_missing() {
   local rel="$1"
-  local url_base="${REPO_RAW_BASE:-$REPO_RAW_BASE_DEFAULT}"
-  local dst="${ROOT_DIR}/${rel}"
+  local dest="${ROOT_DIR}/${rel}"
+  local url="${REPO_RAW_BASE}/${rel}"
 
-  if [[ -f "${dst}" ]]; then
+  # Ensure parent dir exists
+  run_root mkdir -p "$(dirname "$dest")"
+
+  if [[ -f "$dest" ]]; then
     return 0
   fi
 
   say "Missing ${rel} — downloading from repo..."
-  run_root mkdir -p "$(dirname "${dst}")"
-  run_root curl -fsSL "${url_base}/${rel}" -o "${dst}"
+  if ! curl -fsSL "$url" -o "$dest"; then
+    echo "ERROR: failed to download: ${url}" >&2
+    return 1
+  fi
 }
 
-fetch_template() {
-  say "Ensuring UniFi template exists in: ${ROOT_DIR}"
+fetch_template_from_manifest() {
+  say "Fetching template manifest..."
 
-  # 1) Directories
-  for d in "${TEMPLATE_DIRS[@]}"; do
-    run_root mkdir -p "${ROOT_DIR}/${d}"
-  done
+  run_root mkdir -p "${ROOT_DIR}"
+  if ! curl -fsSL "${REPO_RAW_BASE}/${TEMPLATE_MANIFEST}" -o "${ROOT_DIR}/${TEMPLATE_MANIFEST}"; then
+    echo "ERROR: could not download manifest: ${TEMPLATE_MANIFEST}" >&2
+    exit 1
+  fi
 
-  # 2) Required files (fail hard if any cannot be fetched)
-  for f in "${TEMPLATE_FILES_REQUIRED[@]}"; do
-    fetch_if_missing "${f}"
-  done
+  say "Fetching template files listed in ${TEMPLATE_MANIFEST}..."
 
-  # 3) Optional files (best-effort)
-  for f in "${TEMPLATE_FILES_OPTIONAL[@]}"; do
-    fetch_if_missing "${f}" || true
-  done
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line//$'\r'/}" # handle CRLF
+    line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-  # 4) Executable bits (best-effort)
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^# ]] && continue
+    [[ "$line" == */ ]] && continue
+
+    if ! fetch_if_missing "$line"; then
+      echo "ERROR: failed to fetch template file: $line" >&2
+      exit 1
+    fi
+  done < "${ROOT_DIR}/${TEMPLATE_MANIFEST}"
+
   run_root chmod +x "${ROOT_DIR}/backup.sh" "${ROOT_DIR}/restore.sh" 2>/dev/null || true
   run_root chmod +x "${ROOT_DIR}/scripts/"*.sh 2>/dev/null || true
 }
@@ -350,8 +363,8 @@ main() {
   # Is Docker installed and running?
   ensure_docker
 
-  # Fetch/create template files from repo
-  fetch_template
+  # Fetch/create template files from repo's TEMPLATE.manifest
+  fetch_template_from_manifest
   
   # Create/update .env
   write_env
