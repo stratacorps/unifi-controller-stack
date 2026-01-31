@@ -2,6 +2,7 @@ services:
   unifi-db:
     image: docker.io/mongo:${MONGO_IMAGE_TAG:-8}
     container_name: unifi-db
+    env_file: .env
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-unifi}
@@ -21,6 +22,7 @@ services:
     container_name: unifi-network
     depends_on:
       - unifi-db
+    env_file: .env
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}

@@ -18,6 +18,33 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}"
+REPO_RAW_BASE_DEFAULT="https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main"
+STACK_USER=""
+STACK_UID=""
+STACK_GID=""
+STACK_HOME=""
+
+# What we consider the "template" that must exist for a working stack
+TEMPLATE_DIRS=(
+  "scripts"
+  "backups"
+  "mongo-data"
+  "unifi-data"
+)
+
+TEMPLATE_FILES_REQUIRED=(
+  "docker-compose.yml"
+  "scripts/first-run-mongo.sh"
+)
+
+# Optional-but-part-of-template (helpful, but not required to boot containers)
+TEMPLATE_FILES_OPTIONAL=(
+  "backup.sh"
+  "restore.sh"
+  ".env.template"
+  "README.md"
+  "scripts/unifi-cert-deploy.sh"
+)
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -123,6 +150,11 @@ write_env() {
   puid="$(id -u "${stack_user}")"
   pgid="$(id -g "${stack_user}")"
 
+  STACK_USER="${stack_user}"
+  STACK_UID="${puid}"
+  STACK_GID="${pgid}"
+  STACK_HOME="$(getent passwd "${STACK_USER}" | cut -d: -f6)"
+  
   local bind_ip tz
   prompt bind_ip "0.0.0.0" "Bind services to IP (0.0.0.0 = all interfaces)"
   prompt tz "America/Chicago" "Timezone"
@@ -189,18 +221,73 @@ EOF
   echo "  Bind IP:    ${bind_ip}"
 }
 
-ensure_dirs() {
-  say "Ensuring directories exist..."
-  mkdir -p "${ROOT_DIR}/scripts" "${ROOT_DIR}/backups" "${ROOT_DIR}/mongo-data" "${ROOT_DIR}/unifi-data"
-  # Only set ownership if we can read stack user from .env
-  if [[ -f "${ROOT_DIR}/.env" ]]; then
-    local puid pgid
-    puid="$(grep -E '^PUID=' "${ROOT_DIR}/.env" | cut -d= -f2 || true)"
-    pgid="$(grep -E '^PGID=' "${ROOT_DIR}/.env" | cut -d= -f2 || true)"
-    if [[ -n "${puid}" && -n "${pgid}" ]]; then
-      run_root chown -R "${puid}:${pgid}" "${ROOT_DIR}/backups" "${ROOT_DIR}/mongo-data" "${ROOT_DIR}/unifi-data" "${ROOT_DIR}/scripts" || true
+fetch_if_missing() {
+  local rel="$1"
+  local url_base="${REPO_RAW_BASE:-$REPO_RAW_BASE_DEFAULT}"
+  local dst="${ROOT_DIR}/${rel}"
+
+  if [[ -f "${dst}" ]]; then
+    return 0
+  fi
+
+  say "Missing ${rel} — downloading from repo..."
+  run_root mkdir -p "$(dirname "${dst}")"
+  run_root curl -fsSL "${url_base}/${rel}" -o "${dst}"
+}
+
+fetch_template() {
+  say "Ensuring UniFi template exists in: ${ROOT_DIR}"
+
+  # 1) Directories
+  for d in "${TEMPLATE_DIRS[@]}"; do
+    run_root mkdir -p "${ROOT_DIR}/${d}"
+  done
+
+  # 2) Required files (fail hard if any cannot be fetched)
+  for f in "${TEMPLATE_FILES_REQUIRED[@]}"; do
+    fetch_if_missing "${f}"
+  done
+
+  # 3) Optional files (best-effort)
+  for f in "${TEMPLATE_FILES_OPTIONAL[@]}"; do
+    fetch_if_missing "${f}" || true
+  done
+
+  # 4) Executable bits (best-effort)
+  run_root chmod +x "${ROOT_DIR}/backup.sh" "${ROOT_DIR}/restore.sh" 2>/dev/null || true
+  run_root chmod +x "${ROOT_DIR}/scripts/"*.sh 2>/dev/null || true
+}
+
+apply_ownership() {
+  say "Applying ownership for stack directories..."
+
+  # Prefer the values we computed from the selected STACK_USER
+  local puid="${STACK_UID:-}"
+  local pgid="${STACK_GID:-}"
+
+  # Fallback: read from .env if needed
+  if [[ -z "${puid}" || -z "${pgid}" ]]; then
+    if [[ -f "${ROOT_DIR}/.env" ]]; then
+      puid="$(grep -E '^PUID=' "${ROOT_DIR}/.env" | cut -d= -f2 || true)"
+      pgid="$(grep -E '^PGID=' "${ROOT_DIR}/.env" | cut -d= -f2 || true)"
     fi
   fi
+
+  if [[ -z "${puid}" || -z "${pgid}" ]]; then
+    echo "WARN: Cannot determine PUID/PGID; skipping ownership changes." >&2
+    return 0
+  fi
+
+  say "  Ownership: ${puid}:${pgid}"
+  run_root chown -R "${puid}:${pgid}" \
+    "${ROOT_DIR}/backups" \
+    "${ROOT_DIR}/mongo-data" \
+    "${ROOT_DIR}/unifi-data" \
+    "${ROOT_DIR}/scripts" || true
+
+  # Nice-to-have: let stack owner edit these without sudo
+  run_root chown "${puid}:${pgid}" "${ROOT_DIR}/docker-compose.yml" 2>/dev/null || true
+  run_root chown "${puid}:${pgid}" "${ROOT_DIR}/.env" 2>/dev/null || true
 }
 
 bring_up() {
@@ -260,16 +347,23 @@ main() {
   say "UniFi Controller Stack Installer"
   echo "Working directory: ${ROOT_DIR}"
 
+  # Is Docker installed and running?
   ensure_docker
 
-  # Ensure docker group membership for the current user (or they will need sudo for docker)
-  ensure_user_in_docker_group "$(id -un)"
-
+  # Fetch/create template files from repo
+  fetch_template
+  
   # Create/update .env
   write_env
 
-  ensure_dirs
 
+  # Ensure docker group membership for the current user (or they will need sudo for docker)
+  ensure_user_in_docker_group "${STACK_USER}"
+
+  # Apply ownership to stack directories/files
+  apply_ownership
+
+  # Optional (TODO) certbot installation for SSL via DNS-01 (Cloudflare)
   certbot_optional
 
   bring_up
