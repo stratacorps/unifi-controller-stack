@@ -1,0 +1,15 @@
+# 2026 Unifi OS Server Docker template
+
+# Required template files for UniFI Controller Stack
+docker-compose.yml
+README.md
+backup.sh
+restore.sh
+
+# Docker Scripts
+scripts/first-run-mongo.sh
+scripts/unifi-cert-deploy.sh
+
+# Optional
+.env.template
+
