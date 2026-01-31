@@ -1,41 +1,52 @@
 services:
   unifi-db:
-    image: docker.io/mongo:8
+    image: docker.io/mongo:${MONGO_IMAGE_TAG:-8}
     container_name: unifi-db
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=root
-      - MONGO_INITDB_ROOT_PASSWORD=CHANGE_ME
-      - MONGO_USER=unifi
-      - MONGO_PASS=CHANGE_ME
-      - MONGO_DBNAME=unifi
-      - MONGO_AUTHSOURCE=admin
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-unifi}
+      - MONGO_USER=${MONGO_USER:-unifi}
+      - MONGO_PASS=${MONGO_PASS:-unifi}
+      - MONGO_DBNAME=${MONGO_DBNAME:-unifi}
+      - MONGO_DB_STAT=${MONGO_DB_STAT:-unifi_stat}
+      - MONGO_DB_AUDIT=${MONGO_DB_AUDIT:-unifi_audit}
+      - MONGO_AUTHSOURCE=${MONGO_AUTHSOURCE:-admin}
     volumes:
       - ./mongo-data:/data/db
       - ./scripts/first-run-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
     restart: unless-stopped
 
   unifi-network:
-    image: lscr.io/linuxserver/unifi-network-application:10.0.162-ls113
+    image: lscr.io/linuxserver/unifi-network-application:${UNIFI_IMAGE_TAG:-10.0.162-ls113}
     container_name: unifi-network
     depends_on:
       - unifi-db
     environment:
-      - PUID=__PUID__
-      - PGID=__PGID__
-      - TZ=America/Chicago
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Chicago}
       - MONGO_HOST=unifi-db
       - MONGO_PORT=27017
-      - MONGO_DBNAME=unifi
-      - MONGO_USER=unifi
-      - MONGO_PASS=CHANGE_ME
-      - MONGO_AUTHSOURCE=admin
+      - MONGO_DBNAME=${MONGO_DBNAME:-unifi}
+      - MONGO_DB_STAT=${MONGO_DB_STAT:-unifi_stat}
+      - MONGO_DB_AUDIT=${MONGO_DB_AUDIT:-unifi_audit}
+      - MONGO_USER=${MONGO_USER:-unifi}
+      - MONGO_PASS=${MONGO_PASS:-unifi}
+      - MONGO_AUTHSOURCE=${MONGO_AUTHSOURCE:-admin}
     volumes:
       - ./unifi-data:/config
+      # Optional: mount Let's Encrypt live certs into container for unifi-cert-deploy.sh
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
-      - "8443:8443"
-      - "8080:8080"
-      - "3478:3478/udp"
-      - "10001:10001/udp"
-      - "8843:8843"
-      - "8880:8880"
+      # Web UI (HTTPS)
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_HTTPS_PORT:-8443}:8443"
+      # Device inform
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_INFORM_PORT:-8080}:8080"
+      # STUN
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_STUN_PORT:-3478}:3478/udp"
+      # AP discovery
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_DISCOVERY_PORT:-10001}:10001/udp"
+      # Guest portal (optional)
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_GUEST_HTTPS_PORT:-8843}:8843"
+      - "${BIND_IP:-0.0.0.0}:${UNIFI_GUEST_HTTP_PORT:-8880}:8880"
     restart: unless-stopped

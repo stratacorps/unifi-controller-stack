@@ -1,45 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Creates/updates the UniFi Mongo user on first Mongo init.
+# Creates the UniFi DB user on first Mongo init.
+# This runs only when /data/db is EMPTY.
+#
 # Expected env vars:
-#   MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD
 #   MONGO_USER, MONGO_PASS
-# Optional:
-#   MONGO_AUTHSOURCE (default: admin)
-#   MONGO_DBNAME     (default: unifi)
+#   MONGO_DBNAME, MONGO_DB_STAT, MONGO_DB_AUDIT
+#   MONGO_AUTHSOURCE
+#   MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD
 
-AUTHSOURCE="${MONGO_AUTHSOURCE:-admin}"
-DBNAME="${MONGO_DBNAME:-unifi}"
-USER="${MONGO_USER}"
-PASS="${MONGO_PASS}"
+mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin <<EOS
+const AUTH_DB = "${MONGO_AUTHSOURCE:-admin}";
+const USER    = "${MONGO_USER}";
+const PASS    = "${MONGO_PASS}";
+const DBNAME  = "${MONGO_DBNAME}";
+const DBSTAT  = "${MONGO_DB_STAT:-unifi_stat}";
+const DBAUDIT = "${MONGO_DB_AUDIT:-unifi_audit}";
 
-# UniFi commonly uses these DBs:
-DB_STAT="${DBNAME}_stat"      # unifi_stat
-DB_AUDIT="${DBNAME}_audit"    # unifi_audit
+const adminDb = db.getSiblingDB(AUTH_DB);
 
-mongosh --username "$MONGO_INITDB_ROOT_USERNAME" \
-        --password "$MONGO_INITDB_ROOT_PASSWORD" \
-        --authenticationDatabase admin <<EOS
-const authDb = db.getSiblingDB("${AUTHSOURCE}");
-
-const user = "${USER}";
-const pwd  = "${PASS}";
-
-const roles = [
-  { role: "readWrite", db: "${DBNAME}" },
-  { role: "readWrite", db: "${DB_STAT}" },
-  { role: "readWrite", db: "${DB_AUDIT}" }
-];
-
-const existing = authDb.getUser(user);
-
-if (existing == null) {
-  authDb.createUser({ user: user, pwd: pwd, roles: roles });
-  print("Created user '" + user + "' with roles on: ${DBNAME}, ${DB_STAT}, ${DB_AUDIT}");
+if (adminDb.getUser(USER) == null) {
+  adminDb.createUser({
+    user: USER,
+    pwd:  PASS,
+    roles: [
+      { role: "dbOwner", db: DBNAME },
+      { role: "dbOwner", db: DBSTAT },
+      { role: "dbOwner", db: DBAUDIT }
+    ]
+  });
+  print(`Created user '${USER}' with dbOwner on '${DBNAME}', '${DBSTAT}', '${DBAUDIT}'.`);
 } else {
-  // Update password + roles (safe on first-init; also helpful if you re-run in a dev wipe)
-  authDb.updateUser(user, { pwd: pwd, roles: roles });
-  print("Updated user '" + user + "' roles/password on: ${DBNAME}, ${DB_STAT}, ${DB_AUDIT}");
+  print(`User '${USER}' already exists; skipping.`);
 }
 EOS
