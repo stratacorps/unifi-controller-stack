@@ -18,8 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${SCRIPT_DIR}"
-REPO_RAW_BASE="https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main"
-TEMPLATE_MANIFEST="TEMPLATE.manifest"
+REPO_RAW_BASE_DEFAULT="https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main"
 STACK_USER=""
 STACK_UID=""
 STACK_GID=""
@@ -110,6 +109,17 @@ ensure_docker() {
     return
   fi
 
+  say "Docker is not installed on this system."
+
+  local install_ok
+  confirm install_ok "y" \
+    "Install Docker Engine + Docker Compose system-wide now?"
+
+  if [[ "${install_ok}" != "y" ]]; then
+    echo "Aborting. Please install Docker manually, then re-run install.sh."
+    exit 1
+  fi
+  
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     case "${ID}" in
@@ -224,49 +234,37 @@ EOF
 
 fetch_if_missing() {
   local rel="$1"
-  local dest="${ROOT_DIR}/${rel}"
-  local url="${REPO_RAW_BASE}/${rel}"
+  local url_base="${REPO_RAW_BASE:-$REPO_RAW_BASE_DEFAULT}"
+  local dst="${ROOT_DIR}/${rel}"
 
-  # Ensure parent dir exists
-  run_root mkdir -p "$(dirname "$dest")"
-
-  if [[ -f "$dest" ]]; then
+  if [[ -f "${dst}" ]]; then
     return 0
   fi
 
   say "Missing ${rel} — downloading from repo..."
-  if ! curl -fsSL "$url" -o "$dest"; then
-    echo "ERROR: failed to download: ${url}" >&2
-    return 1
-  fi
+  run_root mkdir -p "$(dirname "${dst}")"
+  run_root curl -fsSL "${url_base}/${rel}" -o "${dst}"
 }
 
-fetch_template_from_manifest() {
-  say "Fetching template manifest..."
+fetch_template() {
+  say "Ensuring UniFi template exists in: ${ROOT_DIR}"
 
-  run_root mkdir -p "${ROOT_DIR}"
-  if ! curl -fsSL "${REPO_RAW_BASE}/${TEMPLATE_MANIFEST}" -o "${ROOT_DIR}/${TEMPLATE_MANIFEST}"; then
-    echo "ERROR: could not download manifest: ${TEMPLATE_MANIFEST}" >&2
-    exit 1
-  fi
+  # 1) Directories
+  for d in "${TEMPLATE_DIRS[@]}"; do
+    run_root mkdir -p "${ROOT_DIR}/${d}"
+  done
 
-  say "Fetching template files listed in ${TEMPLATE_MANIFEST}..."
+  # 2) Required files (fail hard if any cannot be fetched)
+  for f in "${TEMPLATE_FILES_REQUIRED[@]}"; do
+    fetch_if_missing "${f}"
+  done
 
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line//$'\r'/}" # handle CRLF
-    line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  # 3) Optional files (best-effort)
+  for f in "${TEMPLATE_FILES_OPTIONAL[@]}"; do
+    fetch_if_missing "${f}" || true
+  done
 
-    [[ -z "$line" ]] && continue
-    [[ "$line" =~ ^# ]] && continue
-    [[ "$line" == */ ]] && continue
-
-    if ! fetch_if_missing "$line"; then
-      echo "ERROR: failed to fetch template file: $line" >&2
-      exit 1
-    fi
-  done < "${ROOT_DIR}/${TEMPLATE_MANIFEST}"
-
+  # 4) Executable bits (best-effort)
   run_root chmod +x "${ROOT_DIR}/backup.sh" "${ROOT_DIR}/restore.sh" 2>/dev/null || true
   run_root chmod +x "${ROOT_DIR}/scripts/"*.sh 2>/dev/null || true
 }
@@ -330,30 +328,70 @@ bring_up() {
 
 certbot_optional() {
   local do_certbot
-  confirm do_certbot "n" "Install certbot via snap now?"
+  confirm do_certbot "n" "Enable certbot (DNS-01 / Cloudflare) setup now?"
   if [[ "${do_certbot}" == "n" ]]; then
     say "Skipping certbot."
     return
   fi
 
   need_sudo
-  say "Installing snapd + certbot..."
-  run_root apt-get update -y
-  run_root apt-get install -y snapd
-  run_root snap install core || true
-  run_root snap refresh core || true
-  run_root snap install --classic certbot
 
-  say "Certbot installed."
+  # Install snapd/certbot only if needed
+  if ! have certbot; then
+    say "Installing snapd + certbot..."
+    run_root apt-get update -y
+    run_root apt-get install -y snapd
+    run_root snap install core || true
+    run_root snap refresh core || true
+    run_root snap install --classic certbot
+  else
+    say "certbot already installed; skipping install."
+  fi
+
+  # Cloudflare DNS plugin (required for DNS-01 automation with Cloudflare)
+  if ! certbot plugins 2>/dev/null | grep -qi 'dns-cloudflare'; then
+    local install_cf
+    confirm install_cf "y" "Install Cloudflare DNS plugin (certbot-dns-cloudflare) via snap?"
+    if [[ "${install_cf}" == "y" ]]; then
+      say "Installing certbot-dns-cloudflare..."
+      run_root snap set certbot trust-plugin-with-root=ok
+      run_root snap install certbot-dns-cloudflare
+    fi
+  else
+    say "certbot-dns-cloudflare plugin already present."
+  fi
+
   cat <<'EOF'
 
 DNS-01 note:
-- For shared hosting / no port 80/443 access, DNS-01 is the right approach.
-- If using Cloudflare, you'll typically use a Cloudflare API token + certbot-dns-cloudflare plugin.
-- This installer does NOT run cert issuance automatically yet (because tokens/domains vary).
-- After issuance, you can use:
-    sudo DOMAIN=your.fqdn ./scripts/unifi-cert-deploy.sh
+- This installer supports DNS-01 (Cloudflare) but does NOT automatically request a new cert by default.
+- Your UniFi deploy helper is:
+    ./scripts/unifi-cert-deploy.sh
+
+To actually issue/renew:
+- You need an existing certbot renewal config OR you need to run certbot certonly once.
+- Once renewal works, you can run:
+    certbot renew --run-deploy-hooks
+
 EOF
+
+  # Optional end-to-end test: renew dry-run + deploy hook
+  local do_test
+  confirm do_test "n" "Run certbot renew --dry-run and execute deploy hooks (if configured)?"
+  if [[ "${do_test}" == "n" ]]; then
+    say "Skipping certbot dry-run test."
+    return
+  fi
+
+  say "Running: certbot renew --dry-run --run-deploy-hooks"
+  say "NOTE: This will only fully test deployment if a renewal config already exists."
+  run_root certbot renew --dry-run --run-deploy-hooks || {
+    echo "ERROR: certbot dry-run failed." >&2
+    echo "If this is a fresh box, you likely need to run 'certbot certonly' once to create the renewal config." >&2
+    return 1
+  }
+
+  say "Certbot dry-run + deploy hooks completed."
 }
 
 main() {
@@ -363,8 +401,8 @@ main() {
   # Is Docker installed and running?
   ensure_docker
 
-  # Fetch/create template files from repo's TEMPLATE.manifest
-  fetch_template_from_manifest
+  # Fetch/create template files from repo
+  fetch_template
   
   # Create/update .env
   write_env
