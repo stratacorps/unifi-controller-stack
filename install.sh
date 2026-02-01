@@ -69,8 +69,14 @@ confirm() {
 }
 
 need_sudo() {
+  # If not root, we must be able to sudo.
   if [[ "$(id -u)" -ne 0 ]]; then
     have sudo || { echo "ERROR: sudo not found and not running as root." >&2; exit 1; }
+    # Validate sudo works (interactive is ok; non-interactive may fail on first run)
+    if ! sudo -v; then
+      echo "ERROR: sudo privileges required to run this installer as a user." >&2
+      exit 1
+    fi
   fi
 }
 
@@ -80,6 +86,37 @@ run_root() {
   else
     sudo "$@"
   fi
+}
+
+preflight() {
+  say "Preflight checks..."
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    say "Running as root."
+  else
+    say "Running as user: $(id -un)"
+  fi
+
+  need_sudo
+
+  # Basic tools we rely on
+  local missing=()
+  for cmd in curl grep cut sed; do
+    have "$cmd" || missing+=("$cmd")
+  done
+
+  if (( ${#missing[@]} )); then
+    echo "ERROR: missing required commands: ${missing[*]}" >&2
+    echo "Install them first (typically: apt-get install -y ${missing[*]})." >&2
+    exit 1
+  fi
+
+  # Optional but used by your password generator
+  if ! have python3; then
+    say "NOTE: python3 not found. Password auto-generation will be weaker/fallback unless you install python3."
+  fi
+
+  say "Preflight OK."
 }
 
 install_docker_ubuntu_debian() {
@@ -140,9 +177,46 @@ ensure_docker() {
 
 ensure_user_in_docker_group() {
   local user="$1"
-  say "Ensuring user '${user}' is in the docker group..."
+
+  # Ensure docker group exists
   run_root groupadd -f docker
+
+  # Is user already in docker group?
+  if id -nG "${user}" | grep -qw docker; then
+    say "User '${user}' is already in the docker group."
+    return 0
+  fi
+
+  say "Adding user '${user}' to the docker group..."
+  run_root usermod -aG docker "${user}"
+
+  cat <<EOF
+
+NOTE:
+- User '${user}' was added to the docker group.
+- This will NOT take effect until the user logs out and logs back in.
+- Docker commands during install still work because this script uses sudo/root.
+
+EOF
+}
+
+ensure_user_in_docker_group_optional() {
+  local user="$1"
+
+  # This is convenience only; not required because install uses run_root docker/compose.
+  say "Optional: adding '${user}' to docker group (so you can run docker without sudo later)..."
+
+  # Create docker group if it doesn't exist yet (safe)
+  run_root groupadd -f docker
+
+  # Add user (safe)
   run_root usermod -aG docker "${user}" || true
+
+  cat <<EOF
+NOTE:
+- Group membership changes take effect after logout/login (or new shell).
+- Installer uses sudo for docker commands, so this does NOT block installation.
+EOF
 }
 
 write_env() {
@@ -270,9 +344,8 @@ fetch_template() {
 }
 
 apply_ownership() {
-  say "Applying ownership for stack directories..."
+  say "Applying ownership for UniFi stack files..."
 
-  # Prefer the values we computed from the selected STACK_USER
   local puid="${STACK_UID:-}"
   local pgid="${STACK_GID:-}"
 
@@ -290,23 +363,35 @@ apply_ownership() {
   fi
 
   say "  Ownership: ${puid}:${pgid}"
-  run_root chown -R "${puid}:${pgid}" \
-    "${ROOT_DIR}/backups" \
-    "${ROOT_DIR}/mongo-data" \
-    "${ROOT_DIR}/unifi-data" \
-    "${ROOT_DIR}/scripts" || true
 
-  # Nice-to-have: let stack owner edit these without sudo
-  run_root chown "${puid}:${pgid}" "${ROOT_DIR}/docker-compose.yml" 2>/dev/null || true
-  run_root chown "${puid}:${pgid}" "${ROOT_DIR}/.env" 2>/dev/null || true
+  local target
+
+  # .env file
+  [[ -e "${ROOT_DIR}/.env" ]] && run_root chown "${puid}:${pgid}" "${ROOT_DIR}/.env" || true
+  
+  # install.sh and current directory
+  run_root chown "${puid}:${pgid}" "${ROOT_DIR}/install.sh" 2>/dev/null || true
+	##run_root chown "${puid}:${pgid}" "${ROOT_DIR}" 2>/dev/null || true
+	
+  # Directories (recursive)
+  for target in "${TEMPLATE_DIRS[@]}"; do
+    [[ -e "${ROOT_DIR}/${target}" ]] || continue
+    run_root chown -R "${puid}:${pgid}" "${ROOT_DIR}/${target}" || true
+  done
+
+  # Files (non-recursive)
+  for target in "${TEMPLATE_FILES_REQUIRED[@]}" "${TEMPLATE_FILES_OPTIONAL[@]}"; do
+    [[ -e "${ROOT_DIR}/${target}" ]] || continue
+    run_root chown "${puid}:${pgid}" "${ROOT_DIR}/${target}" || true
+  done
 }
 
 bring_up() {
   say "Starting stack..."
-  ( cd "${ROOT_DIR}" && docker compose up -d )
+  ( cd "${ROOT_DIR}" && run_root docker compose up -d )
 
   say "Stack status:"
-  ( cd "${ROOT_DIR}" && docker compose ps )
+  ( cd "${ROOT_DIR}" && run_root docker compose ps )
 
   say "Quick local checks (may take 30-90 seconds on first boot)..."
   sleep 5
@@ -397,26 +482,29 @@ EOF
 main() {
   say "UniFi Controller Stack Installer"
   echo "Working directory: ${ROOT_DIR}"
+  
+  # preflight check
+  preflight
 
   # Is Docker installed and running?
   ensure_docker
 
-  # Fetch/create template files from repo
+  # Make sure we have docker-compose.yml + scripts in place from repo
   fetch_template
   
-  # Create/update .env
+  # Now collect config and write .env
   write_env
 
-
   # Ensure docker group membership for the current user (or they will need sudo for docker)
-  ensure_user_in_docker_group "${STACK_USER}"
-
+  ensure_user_in_docker_group_optional "${STACK_USER}"
+  
   # Apply ownership to stack directories/files
   apply_ownership
 
   # Optional (TODO) certbot installation for SSL via DNS-01 (Cloudflare)
   certbot_optional
 
+  # Now start the Unifi OS Server stack
   bring_up
 
   say "Done ✅"
