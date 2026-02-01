@@ -21,12 +21,13 @@ curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-contr
 bash install.sh
 ```
 `A typical installation you would install into a specific 'unifi' user account, so a typical new install session would be like:
-`
-`sudo adduser unifi
-`sudo usermod -aG [docker,]sudo unfi #if docker is already installed, otherwise just allow sudo
-`sudo su - unfi #log in as the unifi user
-`curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
-`sudo bash install.sh
+
+sudo adduser unifi
+sudo usermod -aG [docker,]sudo unfi #if docker is already installed, otherwise just allow sudo
+sudo su - unfi #log in as the unifi user
+curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
+sudo bash install.sh
+
 `
 
 Why not one-liner `curl | bash`? Interactive prompts can hang or misbehave when stdin is a pipe.
