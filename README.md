@@ -7,11 +7,12 @@ This folder is a **template** for running the UniFi Network Application with an 
 - `docker-compose.yml`
 - `.env.example` (installer generates `.env`)
 - `scripts/first-run-mongo.sh` (Mongo init script; runs only on a fresh DB)
-- `scripts/backup.sh`, `scripts/restore.sh`
 - `scripts/unifi-cert-deploy.sh` (optional; for Let's Encrypt -> UniFi keystore import)
 - `backups/` (backup outputs)
 - `mongo-data/` (Mongo persistent data)
 - `unifi-data/` (UniFi persistent data)
+- `backup.sh` (Shutdown docker Unifi/backup everything)
+- `restore.sh` (Restore script to restore a backup to staging or production)
 
 ## Install (2-step, interactive)
 
@@ -19,6 +20,14 @@ This folder is a **template** for running the UniFi Network Application with an 
 curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
 bash install.sh
 ```
+`A typical installation you would install into a specific 'unifi' user account, so a typical new install session would be like:
+`
+`sudo adduser unifi
+`sudo usermod -aG [docker,]sudo unfi #if docker is already installed, otherwise just allow sudo
+`sudo su - unfi #log in as the unifi user
+`curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
+`sudo bash install.sh
+`
 
 Why not one-liner `curl | bash`? Interactive prompts can hang or misbehave when stdin is a pipe.
 This installer reads from `/dev/tty` to be reliable.
