@@ -20,17 +20,19 @@ This folder is a **template** for running the UniFi Network Application with an 
 curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
 bash install.sh
 ```
-`A typical installation you would install into a specific 'unifi' user account, so a typical new install session would be like:
-
+> A typical installation you would install into a specific 'unifi' user account, so a typical new install session would be like:
+```
 sudo adduser unifi
 sudo usermod -aG [docker,]sudo unfi #if docker is already installed, otherwise just allow sudo
 sudo su - unfi #log in as the unifi user
 curl -fsSLo install.sh https://raw.githubusercontent.com/stratacorps/unifi-controller-stack/main/install.sh
 sudo bash install.sh
+```
 
-`
+This example will verify docker is running and install the compose package in the current (e.g. /home/unifi) direcotry.
 
-Why not one-liner `curl | bash`? Interactive prompts can hang or misbehave when stdin is a pipe.
+If you wish to install the Unifi OS Server in a separate dedicated folder, run the script from that directory.
+
 This installer reads from `/dev/tty` to be reliable.
 
 ## Notes
