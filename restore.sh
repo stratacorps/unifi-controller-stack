@@ -17,7 +17,7 @@ set -euo pipefail
 RESTORE_MODE="${RESTORE_MODE:-staging}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}" && pwd)"
 BACKUP_TARBALL="${1:-}"
 
 if [[ -z "${BACKUP_TARBALL}" ]]; then
