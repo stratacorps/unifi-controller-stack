@@ -41,6 +41,7 @@ TEMPLATE_FILES_REQUIRED=(
 TEMPLATE_FILES_OPTIONAL=(
   "backup.sh"
   "restore.sh"
+  "update.sh"
   ".env.template"
   "README.md"
   "scripts/unifi-cert-deploy.sh"

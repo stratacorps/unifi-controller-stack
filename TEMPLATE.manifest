@@ -3,8 +3,11 @@
 # Required template files for UniFI Controller Stack
 docker-compose.yml
 README.md
-backup.sh
-restore.sh
+TEMPLATE.manifest
+
+scripts/backup.sh
+scripts/restore.sh
+scripts/update.sh
 
 # Docker Scripts
 scripts/first-run-mongo.sh

@@ -52,7 +52,7 @@ That will build a PKCS12 bundle and import it into UniFi's keystore.
 
 Backup:
 ```bash
-./scripts/backup.sh
+sudo ./scripts/backup.sh
 ```
 
 Restore (staging):
